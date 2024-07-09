@@ -1,0 +1,230 @@
+---
+# tasks file for postgresql-server
+
+- name: Check that the PostgreSQL data root exist
+  stat:
+    path: "{{ pg_data_root }}/pg_wal"
+  register: pg_data_result
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+  when:
+    - not pg_data_result.stat.exists 
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Install System dependencies for Ubuntu
+  apt:
+    update_cache: no
+    pkg:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg2
+  when:
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Install System dependencies for CentOS 7
+  yum:
+    name:
+      - yum-utils
+      - ca-certificates
+      - curl
+      - gnupg2
+    state: latest
+  when:
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+ 
+- name: Pre-config postgresql repository
+  shell: |
+      curl https://www.postgresql.org/media/keys/ACCC4CF8.asc |  \
+       gpg --dearmor | tee /etc/apt/trusted.gpg.d/apt.postgresql.org.gpg >/dev/null && \
+      echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+  args:
+     executable: /usr/bin/bash 
+  when:
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian"    
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+  when:
+    - not pg_data_result.stat.exists 
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Install Postgresql packages for Ubuntu
+  apt:
+    update_cache: no
+    pkg:
+      - "postgresql-{{ pg_version }}"
+  when:
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Install Postgresql repo for CentOS 7
+  shell: |
+     yum install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+  args:
+    executable: /bin/bash
+  when:
+    - not pg_data_result.stat.exists 
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+- name: Install Postgresql packages for CentOS 7
+  yum:
+    name:
+      - "postgresql{{ pg_version }}-server"
+    state: latest
+  when:
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+
+- name: Postgresql data root dir creation
+  file:
+    path: "{{ pg_data_root }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0750'
+   
+    
+- name: Install sudo for testing  purpose Apt MOLECULE
+  apt:
+    update_cache: no
+    pkg:
+      - sudo
+  when:
+    - molecule_yml is defined
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Install sudo for testing  purpose Yum MOLECULE
+  yum:
+    name:
+      - sudo
+    state: latest
+  when:
+    - molecule_yml is defined
+    - ansible_distribution_file_variety == "RedHat"
+
+- name: Initialize postgresql db at new location Debian like
+  command: sudo -u postgres /lib/postgresql/{{ pg_version }}/bin/initdb -D {{ pg_data_root }}
+  when:
+    - not pg_data_result.stat.exists
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+     
+
+- name: Initialize postgresql db at new location RedHat like
+  command: sudo -u postgres /usr/pgsql-{{ pg_version }}/bin/initdb -D {{ pg_data_root }}
+  when:
+    - not pg_data_result.stat.exists
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat" 
+
+- name: Postgresql conf.d dir creation Redhat like
+  shell: |
+   mkdir {{ pg_data_root }}/conf.d
+  args:
+    executable: /bin/bash
+  when:
+    - not pg_data_result.stat.exists
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat" 
+
+
+- name: Configure postgresql.conf  template common Ubuntu22-20
+  template:
+      src: postgresql-deb.conf.j2
+      dest: "/etc/postgresql/{{ pg_version }}/main/postgresql.conf"
+      backup: yes
+      mode: '0600'  
+  notify: restart_postgresql 
+  when: 
+    - pg_version|string != "15" 
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Configure postgresql.conf template for 15 without stats_temp Ubuntu22-20
+  template:
+      src: postgresql15-deb.conf.j2
+      dest: "/etc/postgresql/{{ pg_version }}/main/postgresql.conf"
+      backup: yes
+      mode: '0600'  
+  notify: restart_postgresql 
+  when: 
+    - pg_version|string == "15" 
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Configure postgresql.conf  template common CentOS7
+  template:
+      src: postgresql-rhel.conf.j2
+      dest: "{{ pg_data_root }}/postgresql.conf"
+      backup: yes
+      mode: '0600'  
+  notify: restart_postgresql 
+  when: 
+    - pg_version|string != "15" 
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+- name: Configure postgresql.conf template for 15 without stats_temp CentOS7
+  template:
+      src: postgresql15-rhel.conf.j2
+      dest: "{{ pg_data_root }}/postgresql.conf"
+      backup: yes
+      mode: '0600'  
+  notify: restart_postgresql 
+  when: 
+    - pg_version|string == "15" 
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+
+- name: Check that the PostgreSQL data root exist
+  stat:
+    path: "{{ pg_data_root }}/postmaster.pid"
+  register: pg_working_result
+
+
+- name: Start Postgresql Service Ubuntu20-22 MOLECULE
+  command: sudo -u postgres /lib/postgresql/{{ pg_version }}/bin/pg_ctl  start -D /etc/postgresql/{{pg_version}}/main -s -w -t 15
+  when: 
+    - molecule_yml is defined 
+    - not pg_working_result.stat.exists
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "20.04" or "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+- name: Start Postgresql Service CentOS7  MOLECULE
+  command: sudo -u postgres /usr/pgsql-{{ pg_version }}/bin/pg_ctl  start -D {{ pg_data_root }} -s -w -t 15
+  when: 
+    - molecule_yml is defined 
+    - not pg_working_result.stat.exists
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+

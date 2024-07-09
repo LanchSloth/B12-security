@@ -1,0 +1,184 @@
+---
+# tasks file for artifactory
+
+- name: Install Postgresql for tests MOLECULE
+  include_role:
+   name: postgresql
+  vars:
+     pg_data_root: /opt/pg_data  
+  when: molecule_yml is defined
+
+
+- name: Install dependencies for JFrog artifactory CentOS7
+  yum:
+   name:
+     - wget
+   state: latest
+  when:
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+- name: Install dependencies for JFrog artifactory Ubuntu-22-04
+  apt:
+   update_cache: no
+   pkg:
+     - wget
+  when:
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "22.04"
+    - ansible_distribution_file_variety == "Debian"
+
+- name: Check if JFrog Artifactory download file is  exist RPM
+  stat:
+     path: /tmp/artifactory-pro.rpm
+  register: result_jfrog_artifactory_rpm_bundle
+  when:
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"
+
+
+- name: Check if JFrog Artifactory download file is  exist DEB
+  stat:
+     path: /tmp/artifactory-pro.deb
+  register: result_jfrog_artifactory_deb_bundle
+  when:
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+
+- name: Download JFrog Artifactory Package RPM
+  shell:  wget -O /tmp/artifactory-pro.rpm "https://releases.jfrog.io/artifactory/artifactory-pro-rpms/jfrog-artifactory-pro/jfrog-artifactory-pro-[RELEASE].rpm"
+  args:
+   executable: /usr/bin/bash 
+  when:
+    - ansible_distribution == "CentOS" and not result_jfrog_artifactory_rpm_bundle.stat.exists
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"  
+
+- name: Download JFrog Artifactory Package DEB
+  shell:  wget -O /tmp/artifactory-pro.deb "https://releases.jfrog.io/artifactory/artifactory-pro-debs/pool/jfrog-artifactory-pro/jfrog-artifactory-pro-[RELEASE].deb"
+  args:
+   executable: /usr/bin/bash 
+  when:
+    - ansible_distribution == "Ubuntu" and not result_jfrog_artifactory_deb_bundle.stat.exists
+    - ansible_distribution_version == "22.04"
+    - ansible_distribution_file_variety == "Debian" 
+
+
+
+- name: Check if JFrog Artifactory Installed
+  stat:
+     path: /opt/jfrog/artifactory/app/bin
+  register: result_jfrog_artifactory_installed
+
+
+
+- name: Install JFrog Artifactory Package RPM
+  yum:
+   name:
+     - /tmp/artifactory-pro.rpm
+   state: present
+  when:
+    - not result_jfrog_artifactory_installed.stat.exists
+    - ansible_distribution == "CentOS"
+    - ansible_distribution_version == "7.9"
+    - ansible_distribution_file_variety == "RedHat"  
+
+- name: Install  JFrog artifactory Ubuntu-22-04
+  apt:
+   deb: /tmp/artifactory-pro.deb 
+  when:
+    - not result_jfrog_artifactory_installed.stat.exists
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "22.04"
+    - ansible_distribution_file_variety == "Debian"
+
+- name: Check if JFrog Artifactory Installed
+  stat:
+     path: /etc/init.d/artifactory.disabled
+  register: result_jfrog_artifactory_service_installed
+#  when:
+#    - ansible_distribution == "CentOS"
+#    - ansible_distribution_version == "7.9"
+#    - ansible_distribution_file_variety == "RedHat"
+
+- name: Install Service JFrog Artifactory  
+  shell: ./installService.sh
+  args:
+     chdir: /opt/jfrog/artifactory/app/bin
+     executable: /bin/sh
+  when: 
+     - not result_jfrog_artifactory_service_installed.stat.exists
+
+
+- name: Configure JFrog Artifactory 
+  template:
+    src: system.yaml.j2
+    dest: /opt/jfrog/artifactory/var/etc/system.yaml
+    backup: yes
+    mode: '0600'
+    owner: artifactory
+    group: artifactory     
+
+
+- name: Check if JFrog Artifactory Access folder exist
+  stat:
+     path: /opt/jfrog/artifactory/var/etc/access
+  register: result_jfrog_access_folder
+
+- name: Create JFrog Artifactory Access folder
+  file:
+    path: /opt/jfrog/artifactory/var/etc/access
+    state: directory
+  when: not result_jfrog_access_folder.stat.exists
+
+- name: Create bootstrap.creds JFrog 
+  template:
+    src: bootstrap.creds.j2
+    dest: /opt/jfrog/artifactory/var/etc/access/bootstrap.creds
+    mode: '0600' 
+    owner: artifactory
+    group: artifactory
+
+- name: Change ownership of log folder Ubuntu
+  file: 
+    path: /opt/jfrog/artifactory/var/log
+    state: directory
+    owner: artifactory
+    group: artifactory
+  when:
+    - ansible_distribution == "Ubuntu"
+    - ansible_distribution_version == "22.04"
+    - ansible_distribution_file_variety == "Debian"
+
+- name: Enable Jfrog Artifactory service
+  service:
+     name: artifactory
+     state: restarted
+     enabled: yes
+
+- name: Pause for 60 seconds to start Jfrog Artifactory API
+  pause:
+    seconds: 60
+  
+
+- name: Create License json Artifactory JFrog 
+  template:
+    src: licenses_artifactory.json.j2
+    dest: /opt/jfrog/artifactory/var/etc/licenses_artifactory.json
+    mode: '0600' 
+  
+- name: POST License json Artifactory JFrog 
+  shell: |
+   cd /opt/jfrog/artifactory/var/etc && \
+   curl -k -X POST 'http://localhost:8046/artifactory/api/system/license' \
+   -u "{{ jfrog_artifactory_username }}":"{{ jfrog_artifactory_password }}" \
+   -H 'content-type: application/json'  \
+   -d @licenses_artifactory.json
+  args:
+    executable: /bin/bash
+
+
